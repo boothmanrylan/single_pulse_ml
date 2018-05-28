@@ -1,25 +1,9 @@
 import random
-
 import numpy as np
-import glob
+from baseband import vdif
+import astropy.units as u
 from scipy import signal
-
-try:
-    import matplotlib 
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-except:
-    plt = None
-    pass
-
-from single_pulse_ml import reader
-from single_pulse_ml import dataproc
-from single_pulse_ml import tools 
-
-try:
-    from single_pulse_ml import plot_tools
-except:
-    plot_tools = None
+import matplotlib.pyplot as plt
 
 
 class Event(object):
@@ -294,7 +278,7 @@ def uniform_range(min_, max_):
 def gen_simulated_frb(NFREQ=16, NTIME=250, sim=True, fluence=(0.03,0.3),
                 spec_ind=(-4, 4), width=(2*0.0016, 1), dm=(-0.01, 0.01),
                 scat_factor=(-3, -0.5), background_noise=None, delta_t=0.0016,
-                plot_burst=False, freq=(800, 400), FREQ_REF=600., scintillate=True,
+                freq=(800, 400), FREQ_REF=600., scintillate=True,
                 ):
     """ Simulate fast radio bursts using the EventSimulator class.
 
@@ -314,8 +298,6 @@ def gen_simulated_frb(NFREQ=16, NTIME=250, sim=True, fluence=(0.03,0.3),
         range of scattering measure (atm arbitrary units)
     background_noise : 
         if None, simulates white noise. Otherwise should be an array (NFREQ, NTIME)
-    plot_burst : bool 
-        generates a plot of the simulated burst
 
     Returns
     -------
@@ -325,8 +307,6 @@ def gen_simulated_frb(NFREQ=16, NTIME=250, sim=True, fluence=(0.03,0.3),
         [dm, fluence, width, spec_ind, disp_ind, scat_factor]
 
     """
-    plot_burst = False
-
     # Hard code incoherent Pathfinder data time resolution
     # Maybe instead this should take a telescope class, which 
     # has all of these things already.
@@ -355,13 +335,6 @@ def gen_simulated_frb(NFREQ=16, NTIME=250, sim=True, fluence=(0.03,0.3),
               width, spec_ind, disp_ind, scat_factor)
     # Add FRB to data array 
     E.add_to_data(delta_t, freq, data, scintillate=scintillate)
-
-    if plot_burst:
-        subplot(211)
-        imshow(data.reshape(-1, NTIME), aspect='auto', 
-               interpolation='nearest', vmin=0, vmax=10)
-        subplot(313)
-        plot(data.reshape(-1, ntime).mean(0))
 
     return data, [dm, fluence, width, spec_ind, disp_ind, scat_factor]
 
@@ -401,7 +374,7 @@ def inject_in_filterbank_background(fn_fil):
         NFREQ, NT = data.data.shape
 
         print("Chunk %d with DM=%.1f" % (ii, dm0))
-        for jj in xrange(nfrb_chunk):
+        for jj in range(nfrb_chunk):
             if 8192*(jj+1) > (NT - end_width):
                 print("Skipping at ", 8192*(jj+1))
                 continue
@@ -421,88 +394,67 @@ def inject_in_filterbank_background(fn_fil):
     np.save('data_250.npy', data_full)
 
 
-def inject_in_filterbank(fn_fil, fn_fil_out, N_FRBs=1, 
-                         NFREQ=1536, NTIME=2**15):
-    """ Inject an FRB in each chunk of data 
-        at random times. Default params are for Apertif data.
+def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
+                     rate=800*u.MHz, fluence=(10**4, 10**4), spec_ind=(-4, 4),
+                     dm=(10**4, 10**5), scat_factor=(-4, -0.5), freq=(800, 400),
+                     FREQ_REF=600.):
+    """ 
+    Generates a simulated FRB and injects it (at a random time) into the data
+    contained in vdif_in, stores the result in vdif_out.
+
+    Args:
+        vdif_in (str):  Path to vdif file to inject the FRB into. vdif_in will
+                        not be altered by this method.
+        vdif_out (str): Path to a vdif file to store the result of this method
+                        in.
+        rate (atropy units 1/time): # of samples per second in vdif_in
+
+        ***For all other arguments see gen_simulated_frb***
+
+    Returns: None
     """
+    delta_t = NTIME / 156250
+    # get the data and the header from vdif_in
+    with vdif.open(vdif_in, 'rs', sample_rate=rate) as fh:
+        data = fh.read()
+        header0 = fh.header0
 
-    chunksize = 5e5
-    ii=0
+    # Get the power from data
+    data = (np.abs(data)**2).mean(1)
+    data = data - np.nanmean(data, axis=1, keepdims=True)
+    data = data.T
 
-    params_full_arr = []
+    copied_data = np.copy(data)
+    background = copied_data[:NFREQ, :NTIME]
 
-    for ii in xrange(N_FRBs):
-        start, stop = chunksize*ii, chunksize*(ii+1)
-        # drop FRB in random location in data chunk
-        offset = int(np.random.uniform(0.1*chunksize, 0.9*chunksize)) 
+    #TODO: double check whether or not the data needs to be transposed
 
-        data, freq, delta_t, header = reader.read_fil_data(fn_fil, 
-                                                start=start, stop=stop)
+    # use the data from vdif_in as background noise in gen_simulated_frb
+    DATA, params = gen_simulated_frb(NFREQ=NFREQ, NTIME=NTIME, sim=True,
+                                     fluence=fluence, spec_ind=spec_ind,
+                                     width=(delta_t*2, 1), dm=dm,
+                                     scat_factor=scat_factor, 
+                                     background_noise=background,
+                                     delta_t=delta_t, freq=freq, 
+                                     FREQ_REF=FREQ_REF)
+    copied_data[:NFREQ, :NTIME] = DATA
+    plt.figure(figsize=(45,70))
+    plt.subplot(121)
+    plt.imshow(data.T, vmin=-1.0, vmax=1.0, interpolation="nearest",
+               aspect="auto")
+    plt.subplot(122)
+    plt.imshow(copied_data.T, vmin=-1.0, vmax=1.0, interpolation="nearest",
+               aspect="auto")
 
-        # injected pulse time in seconds since start of file
-        t0_ind = offset+NTIME//2+chunksize*ii
-        t0 = t0_ind * delta_t
-
-        if len(data[0])==0:
-            break             
-
-        data_event = (data[offset:offset+NTIME].transpose()).astype(np.float)
-
-        data_event, params = gen_simulated_frb(NFREQ=NFREQ, 
-                                               NTIME=NTIME, sim=True, fluence=(0.01, 1.), 
-                                               spec_ind=(-4, 4), width=(delta_t, 2), 
-                                               dm=(100, 1000), scat_factor=(-4, -0.5), 
-                                               background_noise=data_event, 
-                                               delta_t=delta_t, plot_burst=False, 
-                                               freq=(1550, 1250), 
-                                               FREQ_REF=1550.)
-
-        params.append(offset)
-        print("Injecting with DM:%f width: %f offset: %d" % 
-                                (params[0], params[2], offset))
-        
-        data[offset:offset+NTIME] = data_event.transpose()
-
-        #params_full_arr.append(params)
-        width = params[2]
-        downsamp = max(1, int(width/delta_t))
-
-        params_full_arr.append([params[0], 20.0, t0, t0_ind, downsamp])
-
-        if ii==0:
-            fn_rfi_clean = reader.write_to_fil(data, header, fn_fil_out)
-        elif ii>0:
-            fil_obj = reader.filterbank.FilterbankFile(fn_fil_out, mode='readwrite')
-            fil_obj.append_spectra(data) 
-
-        del data 
-
-    params_full_arr = np.array(params_full_arr)
-
-    np.savetxt('/home/arts/connor/arts-analysis/simulated.singlepulse', params_full_arr)
-
-    return params_full_arr
-
-# a, p = gen_simulated_frb(NFREQ=1536, NTIME=2**15, sim=True, fluence=(2),
-#                 spec_ind=(-4, 4), width=(dt), dm=(40.0),
-#                 scat_factor=(-3, -0.5), background_noise=None, delta_t=dt,
-#                 plot_burst=False, freq=(1550, 1250), FREQ_REF=1400., 
-# #                 )
-
-# a, p = gen_simulated_frb(NFREQ=32, NTIME=250, sim=True, fluence=(5, 100),
-#                 spec_ind=(-4, 4), width=(dt, 1), dm=(-0.1, 0.1),
-#                 scat_factor=(-3, -0.5), background_noise=None, delta_t=dt,
-#                 plot_burst=False, freq=(800, 400), FREQ_REF=600., 
-#                 )
+    plt.show()
+    # write the event returned by gen_simulated_frb to vdif_out
+    # with vdif.open(vdif_out, 'ws', header0=header0, sample_rate=rate) as fh:
+    #    fh.write(data.T)
 
 
-def run_full_simulation(sim_obj, tel_obj, mk_plot=False, 
-                        fn_rfi='./data/all_RFI_8001.npy',
-                        fn_noise=None, 
-                        ftype='hdf5', dm_time_array=True, 
-                        outname_tag='', outdir = './data/',
-                        figname='./plots/simulated_frb.pdf'):
+def run_full_simulation(sim_obj, tel_obj, fn_rfi='./data/all_RFI_8001.npy',
+                        fn_noise=None, ftype='hdf5', dm_time_array=True, 
+                        outname_tag='', outdir = './data/'):
 
     outfn = outdir + "data_nt%d_nf%d_dm%d_snr%d-%d_%s.%s" \
                     % (sim_obj._NTIME, sim_obj._NFREQ, 
@@ -580,7 +532,6 @@ def run_full_simulation(sim_obj, tel_obj, mk_plot=False,
                                                 dm=sim_obj._dm,
                                                 fluence=sim_obj._fluence,
                                                 background_noise=noise, 
-                                                plot_burst=False,
                                                 sim=True,                                        
                                                 )
 
@@ -646,17 +597,6 @@ def run_full_simulation(sim_obj, tel_obj, mk_plot=False,
 
         # save down the training data with labels
         np.save(outfn, full_label_arr)
-
-    if plt==None:
-        mk_plot = False 
-
-    if sim_obj._mk_plot==True:
-        kk=0
-
-        plot_tools.plot_simulated_events(
-                arr_sim_full, y, figname, 
-                sim_obj._NSIDE, sim_obj._NFREQ, 
-                sim_obj._NTIME, cmap='Greys')
 
     return arr_sim_full, yfull, params_full_arr, snr 
 
