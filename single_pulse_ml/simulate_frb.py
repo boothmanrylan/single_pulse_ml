@@ -5,6 +5,7 @@ import astropy.units as u
 from scipy import signal
 import matplotlib.pyplot as plt
 
+k_dm = 4.148808e3
 
 class Event(object):
     """ Class to generate a realistic fast radio burst and
@@ -16,7 +17,8 @@ class Event(object):
     https://github.com/kiyo-masui/burst\_search
     """
     def __init__(self, t_ref, f_ref, dm=(0.,2000.), fluence=(0.03,0.3),
-                 width=(2*0.0016, 1.), spec_ind=(-4.,4), disp_ind=2., scat_factor=(0, 0.5), freq=(800., 400.)):
+                 width=(2*0.0016, 1.), spec_ind=(-4.,4), disp_ind=2.,
+                 scat_factor=(0, 0.5), freq=(800., 400.)):
         self.t_ref = t_ref
         self.f_ref = f_ref
         self.width = width
@@ -70,7 +72,7 @@ class Event(object):
         frequency,f, in MHz, _dm in pc cm**-3, and
         a dispersion index, _disp_ind.
         """
-        return 4.148808e3 * _dm * (f**(-_disp_ind))
+        return k_dm * _dm * (f**(-_disp_ind))
 
     def arrival_time(self, f):
         t = self.disp_delay(f, self.dm, self.disp_ind)
@@ -89,24 +91,10 @@ class Event(object):
         delta_freq = bw/NFREQ
 
         # taudm in milliseconds
-        tdm = 8.3e-3 * dm * delta_freq / freq_c**3
+        tdm = (2*k_dm)*(10**-6) * dm * delta_freq / freq_c**3
         tI = np.sqrt(ti**2 + tsamp**2 + tdm**2 + tau**2)
 
         return 1e-3*tI
-
-    def dm_smear(self, DM, freq_c, bw=400.0, NFREQ=1024,
-                 ti=1, tsamp=0.0016, tau=0):
-        """ Calculate DM smearing SNR reduction
-        """
-        tau *= 1e3 # make ms
-        ti *= 1e3
-        tsamp *= 1e3
-
-        delta_freq = bw / NFREQ
-
-        tI = np.sqrt(ti**2 + tsamp**2 + (8.3 * DM * delta_freq / freq_c**3)**2)
-
-        return (np.sqrt(ti**2 + tau**2) / tI)**0.5
 
     def scintillation(self, freq):
         """ Include spectral scintillation across
@@ -155,7 +143,6 @@ class Event(object):
         """
         gaus_prof = self.gaussian_profile(nt, width, t0=t0)
         scat_prof = self.scat_profile(nt, f, tau)
-#        pulse_prof = np.convolve(gaus_prof, scat_prof, mode='full')[:nt]
         pulse_prof = signal.fftconvolve(gaus_prof, scat_prof)[:nt]
 
         return pulse_prof
@@ -200,29 +187,6 @@ class Event(object):
 
             data[ii] +=pp
         return data
-
-    def dm_transform(self, delta_t, data, freq, maxdm=5.0, NDM=50):
-        """ Transform freq/time data to dm/time data.
-        """
-
-        if len(freq)<3:
-            NFREQ = data.shape[0]
-            freq = np.linspace(freq[0], freq[1], NFREQ)
-
-        dm = np.linspace(-maxdm, maxdm, NDM)
-        ndm = len(dm)
-        ntime = data.shape[-1]
-
-        data_full = np.zeros([ndm, ntime])
-
-        for ii, dm in enumerate(dm):
-            for jj, f in enumerate(freq):
-                self.dm = dm
-                tpix = int(self.arrival_time(f) / delta_t)
-                data_rot = np.roll(data[jj], tpix, axis=-1)
-                data_full[ii] += data_rot
-
-        return data_full
 
 
 def gen_simulated_frb(NFREQ=16, NTIME=250, sim=True, fluence=(0.03,0.3),
@@ -285,61 +249,6 @@ def gen_simulated_frb(NFREQ=16, NTIME=250, sim=True, fluence=(0.03,0.3),
     return new_data, [E.dm, E.fluence, E.width, E.spec_ind, E.disp_ind, E.scat_factor]
 
 
-def inject_in_filterbank_background(fn_fil):
-    """ Inject an FRB in each chunk of data
-        at random times. Default params are for Apertif data.
-    """
-
-    chunksize = 5e5
-    ii=0
-
-    data_full =[]
-    nchunks = 250
-    nfrb_chunk = 8
-    chunksize = 2**16
-
-    for ii in range(nchunks):
-        downsamp = 2**((np.random.rand(nfrb_chunk)*6).astype(int))
-
-        try:
-            # drop FRB in random location in data chunk
-            rawdatafile = filterbank.filterbank(fn_fil)
-            dt = rawdatafile.header['tsamp']
-            freq_up = rawdatafile.header['fch1']
-            nfreq = rawdatafile.header['nchans']
-            freq_low = freq_up + nfreq*rawdatafile.header['foff']
-            data = rawdatafile.get_spectra(ii*chunksize, chunksize)
-        except:
-            continue
-
-
-        #dms = np.random.uniform(50, 750, nfrb_chunk)
-        dm0 = np.random.uniform(90, 750)
-        end_width = abs(4e3 * dm0 * (freq_up**-2 - freq_low**-2))
-        data.dedisperse(dm0)
-        NFREQ, NT = data.data.shape
-
-        print("Chunk %d with DM=%.1f" % (ii, dm0))
-        for jj in range(nfrb_chunk):
-            if 8192*(jj+1) > (NT - end_width):
-                print("Skipping at ", 8192*(jj+1))
-                continue
-            data_event = data.data[:, jj*8192:(jj+1)*8192]
-            data_event = data_event.reshape(NFREQ, -1, downsamp[jj]).mean(-1)
-            print(data_event.shape)
-            data_event = data_event.reshape(32, 48, -1).mean(1)
-
-            NTIME = data_event.shape[-1]
-            data_event = data_event[..., NTIME//2-125:NTIME//2+125]
-            data_event -= np.mean(data_event, axis=-1, keepdims=True)
-            data_full.append(data_event)
-
-    data_full = np.concatenate(data_full)
-    data_full = data_full.reshape(-1, 32, 250)
-
-    np.save('data_250.npy', data_full)
-
-
 def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
                      rate=800*u.MHz, fluence=(10**4, 10**4), spec_ind=(2, 2),
                      dm=(10**4, 10**5), scat_factor=(-4, -0.5), freq=(800, 400),
@@ -393,156 +302,5 @@ def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
     # write the event returned by gen_simulated_frb to vdif_out
     # with vdif.open(vdif_out, 'ws', header0=header0, sample_rate=rate) as fh:
     #    fh.write(data.T)
-
-
-def run_full_simulation(sim_obj, tel_obj, fn_rfi='./data/all_RFI_8001.npy',
-                        fn_noise=None, ftype='hdf5', dm_time_array=True,
-                        outname_tag='', outdir = './data/'):
-
-    outfn = outdir + "data_nt%d_nf%d_dm%d_snr%d-%d_%s.%s" \
-                    % (sim_obj._NTIME, sim_obj._NFREQ,
-                       round(max(sim_obj._dm)), sim_obj._SNR_MIN,
-                       sim_obj._SNR_MAX, outname_tag, ftype)
-
-    if fn_rfi is not None:
-        data_rfi, y = sim_obj.get_false_positives(fn_rfi)
-    else:
-        data_rfi, y = sim_obj.generate_noise()
-
-    if fn_noise is not None:
-        noise_arr = np.load(fn_noise)   # Hack
-
-    sim_obj._NRFI = min(sim_obj._NRFI, data_rfi.shape[0])
-    print("\nUsing %d false-positive triggers" % sim_obj._NRFI)
-    print("Simulating %d FRBs\n" % sim_obj._NSIM)
-
-    arr_sim_full = [] # data array with all events
-    yfull = [] # label array FP=0, TP=1
-    arr_dm_time_full = []
-
-    params_full_arr = []
-    width_full_arr = []
-
-    snr = [] # Keep track of simulated FRB signal-to-noise
-    ii = -1
-    jj = 0
-
-    # Loop through total number of events
-    while jj < (sim_obj._NRFI + sim_obj._NSIM):
-        jj = len(arr_sim_full)
-        ii += 1
-        if ii % 500 == 0:
-            print("simulated:%d kept:%d" % (ii, jj))
-
-        # If ii is greater than the number of RFI events in f, 
-        # simulate an FRB
-        #sim = bool(ii >= NRFI)
-
-        if ii < sim_obj._NRFI:
-            data = data_rfi[ii].reshape(sim_obj._NFREQ, sim_obj._NTIME)
-
-            # Normalize data to have unit variance and zero median
-            data = reader.rebin_arr(data, sim_obj._NFREQ, sim_obj._NTIME)
-            data = dataproc.normalize_data(data)
-
-            arr_sim_full.append(data.reshape(sim_obj._NFREQ*sim_obj._NTIME)[None])
-            yfull.append(0) # Label the RFI with '0'
-            continue
-
-        elif (ii >=sim_obj._NRFI and jj < (sim_obj._NRFI + sim_obj._NSIM)):
-
-            if fn_noise is not None:
-                noise_ind = (jj-sim_obj._NRFI) % len(noise_arr) # allow for roll-over
-                noise = (noise_arr[noise_ind]).copy()
-                noise[noise!=noise] = 0.0
-                noise -= np.median(noise, axis=-1)[..., None]
-                noise -= np.median(noise)
-                noise /= np.std(noise)
-#                noise[:, 21] = 0 # hack mask out single bad channel
-            else:
-                noise = None
-
-            # maybe should feed gen_sim a tel object and 
-            # a set of burst parameters... 
-            arr_sim, params = gen_simulated_frb(NFREQ=sim_obj._NFREQ,
-                                                NTIME=sim_obj._NTIME,
-                                                delta_t=tel_obj._DELTA_T,
-                                                freq=tel_obj._freq,
-                                                FREQ_REF=tel_obj._FREQ_REF,
-                                                spec_ind=sim_obj._spec_ind,
-                                                width=sim_obj._width,
-                                                scat_factor=sim_obj._scat_factor,
-                                                dm=sim_obj._dm,
-                                                fluence=sim_obj._fluence,
-                                                background_noise=noise,
-                                                sim=True,
-                                                )
-
-            # Normalize data to have unit variance and zero median
-            arr_sim = reader.rebin_arr(arr_sim, sim_obj._NFREQ, sim_obj._NTIME)
-            arr_sim = dataproc.normalize_data(arr_sim)
-
-            # get SNR of simulated pulse. Center should be at ntime//2
-            # rebin until max SNR is found.
-            snr_ = tools.calc_snr(arr_sim.mean(0), fast=False)
-
-            # Only use events within a range of signal-to-noise
-            if snr_ > sim_obj._SNR_MIN and snr_ < sim_obj._SNR_MAX:
-                arr_sim_full.append(arr_sim.reshape(-1, sim_obj._NFREQ*sim_obj._NTIME))
-                yfull.append(1) # Label the simulated FRB with '1'
-                params_full_arr.append(params) # Save parameters bursts
-                snr.append(snr_)
-                continue
-            else:
-                continue
-
-    if dm_time_array is True:
-        E = Event(0, tel_obj._FREQ_REF, 0.0, 1.0, tel_obj._DELTA_T, 0., )
-
-        for ii, data in enumerate(arr_sim_full):
-            if ii%500==0:
-                print("DM-transformed:%d" % ii)
-
-            data = data.reshape(-1, sim_obj._NTIME)
-            data = dataproc.normalize_data(data)
-            data_dm_time = E.dm_transform(tel_obj._DELTA_T, data, tel_obj._freq)
-            data_dm_time = dataproc.normalize_data(data_dm_time)
-            arr_dm_time_full.append(data_dm_time)
-
-        NDM = data_dm_time.shape[0]
-        arr_dm_time_full = np.concatenate(arr_dm_time_full)
-        arr_dm_time_full = arr_dm_time_full.reshape(-1, NDM, sim_obj._NTIME)
-    else:
-        data_dm_time_full = None
-
-    params_full_arr = np.concatenate(params_full_arr).reshape(-1, 6)
-    snr = np.array(snr)
-    yfull = np.array(yfull)
-
-    arr_sim_full = np.concatenate(arr_sim_full, axis=-1)
-    arr_sim_full = arr_sim_full.reshape(-1, sim_obj._NFREQ*sim_obj._NTIME)
-
-    print("\nGenerated %d simulated FRBs with mean SNR: %f"
-                            % (sim_obj._NSIM, snr.mean()))
-    print("Used %d RFI triggers" % sim_obj._NRFI)
-    print("Total triggers with SNR>10: %d" % arr_sim_full.shape[0])
-
-    if ftype is 'hdf5':
-        arr_sim_full = arr_sim_full.reshape(-1, sim_obj._NFREQ, sim_obj._NTIME)
-        sim_obj.write_sim_data(arr_sim_full, yfull, outfn,
-                               data_dm_time=arr_dm_time_full,
-                               params=params_full_arr,
-                               snr=snr)
-        print("Saving training/label data to:\n%s" % outfn)
-    else:
-        full_label_arr = np.concatenate((arr_sim_full, yfull[:, None]), axis=-1)
-        print("Saving training/label data to:\n%s" % outfn)
-
-        # save down the training data with labels
-        np.save(outfn, full_label_arr)
-
-    return arr_sim_full, yfull, params_full_arr, snr
-
-
 
 
