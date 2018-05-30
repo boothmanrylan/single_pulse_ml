@@ -137,11 +137,11 @@ class Event(object):
         self._fluence /= np.sqrt(NFREQ)
         stds = np.std(data)
 
-        for ii, f in enumerate(freq):
-            width_ = self.calc_width(self._dm, self._f_ref*1e-3, 
-                                            bw=400.0, NFREQ=NFREQ,
-                                            ti=self._width, tsamp=delta_t, tau=0)
+        width_ = self.calc_width(self._dm, self._f_ref*1e-3, 
+                                        bw=400.0, NFREQ=NFREQ,
+                                        ti=self._width, tsamp=delta_t, tau=0)
 
+        for ii, f in enumerate(freq):
             index_width = max(1, (np.round((width_/ delta_t))).astype(int))
             tpix = int(self.arrival_time(f) / delta_t)
 
@@ -440,10 +440,10 @@ def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
     copied_data[:NFREQ, :NTIME] = DATA
     plt.figure(figsize=(45,70))
     plt.subplot(121)
-    plt.imshow(data.T, vmin=-1.0, vmax=1.0, interpolation="nearest",
+    plt.imshow(data, vmin=-1.0, vmax=1.0, interpolation="nearest",
                aspect="auto")
     plt.subplot(122)
-    plt.imshow(copied_data.T, vmin=-1.0, vmax=1.0, interpolation="nearest",
+    plt.imshow(copied_data, vmin=-1.0, vmax=1.0, interpolation="nearest",
                aspect="auto")
 
     plt.show()
