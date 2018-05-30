@@ -67,31 +67,30 @@ class Event(object):
 
         self.freq = np.linspace(self.freq_low, self.freq_up, 256) # tel parameter 
 
-    def disp_delay(self, f, _dm, _disp_ind=-2.):
+    def disp_delay(self, f):
         """ Calculate dispersion delay in seconds for
         frequency,f, in MHz, _dm in pc cm**-3, and
         a dispersion index, _disp_ind.
         """
-        return k_dm * _dm * (f**(-_disp_ind))
+        return k_dm * self.dm * (f**(-self.disp_ind))
 
     def arrival_time(self, f):
-        t = self.disp_delay(f, self.dm, self.disp_ind)
-        t = t - self.disp_delay(self.f_ref, self.dm, self.disp_ind)
+        t = self.disp_delay(f)
+        t = t - self.disp_delay(self.f_ref)
         return self.t_ref + t
 
-    def calc_width(self, dm, freq_c, bw=400.0, NFREQ=1024,
-                   ti=0.001, tsamp=0.001, tau=0):
+    def calc_width(self, bw=400.0, NFREQ=1024, tsamp=0.001, tau=0):
         """ Calculated effective width of pulse
         including DM smearing, sample time, etc.
         Input/output times are in seconds.
         """
 
-        ti *= 1e3
+        ti = self.width * 1e3
         tsamp *= 1e3
         delta_freq = bw/NFREQ
 
         # taudm in milliseconds
-        tdm = (2*k_dm)*(10**-6) * dm * delta_freq / freq_c**3
+        tdm = (2*k_dm)*(10**-6) * self.dm * delta_freq / (self.f_ref*1e-3)**3
         tI = np.sqrt(ti**2 + tsamp**2 + tdm**2 + tau**2)
 
         return 1e-3*tI
@@ -137,12 +136,12 @@ class Event(object):
         prof = 1 / tau_nu * np.exp(-t / tau_nu)
         return prof / prof.max()
 
-    def pulse_profile(self, nt, width, f, tau=100., t0=0.):
+    def pulse_profile(self, nt, width, f, t0=0.):
         """ Convolve the gaussian and scattering profiles
         for final pulse shape at each frequency channel.
         """
         gaus_prof = self.gaussian_profile(nt, width, t0=t0)
-        scat_prof = self.scat_profile(nt, f, tau)
+        scat_prof = self.scat_profile(nt, f, self.scat_factor)
         pulse_prof = signal.fftconvolve(gaus_prof, scat_prof)[:nt]
 
         return pulse_prof
@@ -163,9 +162,7 @@ class Event(object):
         self.fluence /= np.sqrt(NFREQ)
         stds = np.std(data)
 
-        width_ = self.calc_width(self.dm, self.f_ref*1e-3,
-                                        bw=bw, NFREQ=NFREQ,
-                                        ti=self.width, tsamp=delta_t, tau=0)
+        width_ = self.calc_width(bw=bw, NFREQ=NFREQ, tsamp=delta_t, tau=0)
         index_width = max(1, (np.round((width_/ delta_t))).astype(int))
 
         for ii, f in enumerate(freq):
@@ -175,8 +172,7 @@ class Event(object):
                 # ensure that edges of data are not crossed
                 continue
 
-            pp = self.pulse_profile(NTIME, index_width, f,
-                                    tau=self.scat_factor, t0=tpix)
+            pp = self.pulse_profile(NTIME, index_width, f, t0=tpix)
             pp /= (pp.max()*stds)
             pp *= self.fluence
             pp /= (width_ / delta_t)
