@@ -23,9 +23,13 @@ class Event(object):
         self.f_ref = f_ref
         self.freq_low = freq[0]
         self.freq_up = freq[1]
-        self.delta_t = delta_t
         self.scintillate = scintillate
         self.bandwidth = max(freq) - min(freq)
+
+        if rate is None:
+            self.delta_t = delta_t
+        else:
+            self.delta_t = (1/rate).value
 
         self.make_background(background_noise, NFREQ, NTIME, rate)
 
@@ -225,8 +229,8 @@ class Event(object):
 
 def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
                      rate=800*u.MHz, fluence=(10**4, 10**4), spec_ind=(2, 2),
-                     dm=(10**4, 10**5), scat_factor=(-4, -0.5), freq=(800, 400),
-                     FREQ_REF=600.):
+                     dm=(10**2, 10**3), scat_factor=(-4, -0.5), freq=(800, 400),
+                     FREQ_REF=600., delta_t=0.0016):
     """
     Generates a simulated FRB and injects it (at a random time) into the data
     contained in vdif_in, stores the result in vdif_out.
@@ -242,11 +246,10 @@ def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
 
     Returns: None
     """
-    delta_t = NTIME / 156250
     # get the data and the header from vdif_in
 
     # use the data from vdif_in as background noise in gen_simulated_frb
-    event = Event(NFREQ=NFREQ, NTIME=NTIME, t_ref=0, fluence=fluence,
+    event = Event(t_ref=0, fluence=fluence, rate=rate,
                   spec_ind=spec_ind, width=(delta_t*2, 1), dm=dm,
                   scat_factor=scat_factor, background_noise=vdif_in,
                   delta_t=delta_t, freq=freq, f_ref=FREQ_REF)
