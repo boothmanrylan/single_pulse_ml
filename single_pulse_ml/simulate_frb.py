@@ -16,7 +16,8 @@ class Event(object):
     in Kiyoshi Masui's
     https://github.com/kiyo-masui/burst\_search
     """
-    def __init__(self, t_ref, f_ref, dm=(0.,2000.), fluence=(0.03,0.3),
+    def __init__(self, t_ref, f_ref, NFREQ=16, NTIME=250, delta_t=0.0016,
+                 background_noise=None, dm=(0.,2000.), fluence=(0.03,0.3),
                  width=(2*0.0016, 1.), spec_ind=(-4.,4), disp_ind=2.,
                  scat_factor=(0, 0.5), freq=(800., 400.)):
         self.t_ref = t_ref
@@ -24,6 +25,16 @@ class Event(object):
         self.width = width
         self.freq_low = freq[0]
         self.freq_up = freq[1]
+        self.delta_t = delta_t
+
+        if background_noise is None:
+            self.background_noise = np.random.normal(0, 1, size=(NFREQ, NTIME))
+            self.NFREQ = NFREQ
+            self.NTIME = NTIME
+        else:
+            self.background_noise = background_noise
+            self.NFREQ = background_noise.shape[0]
+            self.NTIME = background_noise.shape[1]
 
         if hasattr(dm, '__iter__') and len(dm) == 2:
             _dm = tuple(dm)
@@ -65,7 +76,7 @@ class Event(object):
         self.scat_factor = np.exp(np.random.uniform(*_scat_factor))
         self.scat_factor = min(1, self.scat_factor + 1e-18) # quick bug fix hack
 
-        self.freq = np.linspace(self.freq_low, self.freq_up, 256) # tel parameter 
+        self.freq = np.linspace(self.freq_low, self.freq_up, self.NFREQ) # tel parameter 
 
     def disp_delay(self, f):
         """ Calculate dispersion delay in seconds for
@@ -79,15 +90,15 @@ class Event(object):
         t = t - self.disp_delay(self.f_ref)
         return self.t_ref + t
 
-    def calc_width(self, bw=400.0, NFREQ=1024, tsamp=0.001, tau=0):
+    def calc_width(self, bw=400.0, tau=0):
         """ Calculated effective width of pulse
         including DM smearing, sample time, etc.
         Input/output times are in seconds.
         """
 
         ti = self.width * 1e3
-        tsamp *= 1e3
-        delta_freq = bw/NFREQ
+        tsamp = self.delta_t * 1e3
+        delta_freq = bw/self.NFREQ
 
         # taudm in milliseconds
         tdm = (2*k_dm)*(10**-6) * self.dm * delta_freq / (self.f_ref*1e-3)**3
@@ -146,36 +157,34 @@ class Event(object):
 
         return pulse_prof
 
-    def add_to_data(self, delta_t, freq, data, bw, scintillate=True):
+    def add_to_data(self, bw, scintillate=True):
         """ Method to add already-dedispersed pulse
         to background noise data. Includes frequency-dependent
         width (smearing, scattering, etc.) and amplitude
         (scintillation, spectral index).
         """
-        data = np.copy(data)
+        data = np.copy(self.background_noise)
 
-        NFREQ = data.shape[0]
-        NTIME = data.shape[1]
-        tmid = NTIME//2
+        tmid = self.NTIME//2
 
-        scint_amp = self.scintillation(freq)
-        self.fluence /= np.sqrt(NFREQ)
+        scint_amp = self.scintillation(self.freq)
+        self.fluence /= np.sqrt(self.NFREQ)
         stds = np.std(data)
 
-        width_ = self.calc_width(bw=bw, NFREQ=NFREQ, tsamp=delta_t, tau=0)
-        index_width = max(1, (np.round((width_/ delta_t))).astype(int))
+        width_ = self.calc_width(bw=bw, tau=0)
+        index_width = max(1, (np.round((width_/ self.delta_t))).astype(int))
 
-        for ii, f in enumerate(freq):
-            tpix = int(self.arrival_time(f) / delta_t)
+        for ii, f in enumerate(self.freq):
+            tpix = int(self.arrival_time(f) / self.delta_t)
 
             if abs(tpix) >= tmid:
                 # ensure that edges of data are not crossed
                 continue
 
-            pp = self.pulse_profile(NTIME, index_width, f, t0=tpix)
+            pp = self.pulse_profile(self.NTIME, index_width, f, t0=tpix)
             pp /= (pp.max()*stds)
             pp *= self.fluence
-            pp /= (width_ / delta_t)
+            pp /= (width_ / self.delta_t)
             pp = pp * (f / self.f_ref) ** self.spec_ind
 
             if scintillate is True:
@@ -183,66 +192,6 @@ class Event(object):
 
             data[ii] +=pp
         return data
-
-
-def gen_simulated_frb(NFREQ=16, NTIME=250, sim=True, fluence=(0.03,0.3),
-                spec_ind=(-4, 4), width=(2*0.0016, 1), dm=(-0.01, 0.01),
-                scat_factor=(-3, -0.5), background_noise=None, delta_t=0.0016,
-                freq=(800, 400), FREQ_REF=600., scintillate=True,
-                ):
-    """ Simulate fast radio bursts using the EventSimulator class.
-
-    Parameters
-    ----------
-    NFREQ       : np.int
-        number of frequencies for simulated array
-    NTIME       : np.int
-        number of times for simulated array
-    sim         : bool
-        whether or not to simulate FRB or just create noise array
-    spec_ind    : tuple
-        range of spectral index
-    width       : tuple
-        range of widths in seconds (atm assumed dt=0.0016)
-    scat_factor : tuple
-        range of scattering measure (atm arbitrary units)
-    background_noise :
-        if None, simulates white noise. Otherwise should be an array (NFREQ, NTIME)
-
-    Returns
-    -------
-    data : np.array
-        data array (NFREQ, NTIME)
-    parameters : tuple
-        [dm, fluence, width, spec_ind, disp_ind, scat_factor]
-
-    """
-    # Hard code incoherent Pathfinder data time resolution
-    # Maybe instead this should take a telescope class, which 
-    # has all of these things already.
-    t_ref = 0. # hack
-
-    if len(freq) < 3:
-        freq=np.linspace(freq[0], freq[1], NFREQ)
-
-    if background_noise is None:
-        # Generate background noise with unit variance
-        data = np.random.normal(0, 1, NTIME*NFREQ).reshape(NFREQ, NTIME)
-    else:
-        data = background_noise
-
-    # What about reading in noisy background?
-    if sim is False:
-        return data, []
-
-    # Create event class with those parameters 
-    #TODO multiple fluence by 10e-4
-    E = Event(t_ref, FREQ_REF, dm=dm, fluence=fluence,
-              width=width, spec_ind=spec_ind)
-    # Add FRB to data array 
-    new_data = E.add_to_data(delta_t, freq, data, bw=max(freq)-min(freq), scintillate=scintillate)
-
-    return new_data, [E.dm, E.fluence, E.width, E.spec_ind, E.disp_ind, E.scat_factor]
 
 
 def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
@@ -278,13 +227,11 @@ def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
     background = data[:NFREQ, :NTIME]
 
     # use the data from vdif_in as background noise in gen_simulated_frb
-    new_data, params = gen_simulated_frb(NFREQ=NFREQ, NTIME=NTIME, sim=True,
-                                         fluence=fluence, spec_ind=spec_ind,
-                                         width=(delta_t*2, 1), dm=dm,
-                                         scat_factor=scat_factor,
-                                         background_noise=background,
-                                         delta_t=delta_t, freq=freq,
-                                         FREQ_REF=FREQ_REF)
+    event = Event(NFREQ=NFREQ, NTIME=NTIME, t_ref=0, fluence=fluence,
+                  spec_ind=spec_ind, width=(delta_t*2, 1), dm=dm,
+                  scat_factor=scat_factor, background_noise=background,
+                  delta_t=delta_t, freq=freq, f_ref=FREQ_REF)
+    new_data = event.add_to_data(bw=400, scintillate=True)
     plt.figure(figsize=(45,70))
     plt.subplot(121)
     plt.imshow(data, vmin=-1.0, vmax=1.0, interpolation="nearest",
