@@ -25,6 +25,7 @@ class Event(object):
         self.freq_up = freq[1]
         self.scintillate = scintillate
         self.bandwidth = max(freq) - min(freq)
+        self.rate=rate
 
         if rate is None:
             self.delta_t = delta_t
@@ -213,13 +214,26 @@ class Event(object):
         return data
 
     def plot(self, save=None):
-        plt.figure(figsize=(45,70))
-        plt.subplot(121)
-        plt.imshow(self.background_noise, vmin=-1.0, vmax=1.0, interpolation="nearest",
+        f, axis = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(18, 30))
+        axis[0].imshow(self.background_noise, vmin=-1.0, vmax=1.0, interpolation="nearest",
+                       aspect="auto")
+        axis[0].set_title("Background Noise")
+        axis[0].set_xlabel("Time (ms)")
+        axis[0].set_ylabel("Frequency (MHz)")
+        yticks = np.linspace(0, self.NFREQ, 10)
+        ylabels = int(max(self.freq))-(self.bandwidth/self.NFREQ*yticks).astype(int)
+        xticks = np.linspace(0, self.NTIME, 10)
+        xlabels = (self.delta_t * xticks).astype(int)
+        axis[0].set_yticks(yticks)
+        axis[0].set_yticklabels(ylabels)
+        axis[0].set_xticks(xticks)
+        axis[0].set_xticklabels(xlabels)
+        axis[1].imshow(self.simulated_frb, vmin=-1.0, vmax=1.0, interpolation="nearest",
                    aspect="auto")
-        plt.subplot(122)
-        plt.imshow(self.simulated_frb, vmin=-1.0, vmax=1.0, interpolation="nearest",
-                   aspect="auto")
+        axis[1].set_title("Simulated FRB")
+        axis[1].set_xlabel("Time (ms)")
+        axis[1].set_xticks(xticks)
+        axis[1].set_xticklabels(xlabels)
 
         if save is None:
             plt.show()
@@ -229,8 +243,8 @@ class Event(object):
 
 def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
                      rate=800*u.MHz, fluence=(10**4, 10**4), spec_ind=(2, 2),
-                     dm=(10**2, 10**3), scat_factor=(-4, -0.5), freq=(800, 400),
-                     FREQ_REF=600., delta_t=0.0016):
+                     dm=(10**3, 10**3), scat_factor=(-4, -0.5), freq=(800, 400),
+                     FREQ_REF=600.):
     """
     Generates a simulated FRB and injects it (at a random time) into the data
     contained in vdif_in, stores the result in vdif_out.
@@ -250,8 +264,8 @@ def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
 
     # use the data from vdif_in as background noise in gen_simulated_frb
     event = Event(t_ref=0, fluence=fluence, rate=rate,
-                  spec_ind=spec_ind, width=(delta_t*2, 1), dm=dm,
+                  spec_ind=spec_ind, width=(0.0016*2, 1), dm=dm,
                   scat_factor=scat_factor, background_noise=vdif_in,
-                  delta_t=delta_t, freq=freq, f_ref=FREQ_REF)
+                  freq=freq, f_ref=FREQ_REF)
     event.plot()
 
