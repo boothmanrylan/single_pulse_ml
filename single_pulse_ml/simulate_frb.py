@@ -31,64 +31,54 @@ class Event(object):
 
         self.stds = np.std(self.background_noise)
 
-        if hasattr(dm, '__iter__') and len(dm) == 2:
-            _dm = tuple(dm)
-        else:
-            _dm = (float(dm), float(dm))
-        self.dm = random.uniform(*_dm)
+        try:
+            self.dm = random.uniform(*dm)
+        except:
+            self.dm = dm
 
-        if hasattr(fluence, '__iter__') and len(fluence) == 2:
-            fluence = (fluence[1]**-1, fluence[0]**-1)
-            _fluence = tuple(fluence)
-        else:
-            _fluence = (float(fluence)**-1, float(fluence)**-1)
-        self.fluence = random.uniform(*_fluence)**(-2/3.)
-        self.fluence *= 1e3*_fluence[0]**(-2/3.)
+        try:
+            # There is a weird effect when the bracets around random are
+            # removed changing the order of operations
+            self.fluence = 1e3*(random.uniform(*fluence)**4/3)
+        except:
+            self.fluence = 1e3*(fluence**4/3)
 
-        if hasattr(width, '__iter__') and len(width) == 2:
-            _width = tuple(width)
-        else:
-             _width = (float(width), float(width))
-        self.width = np.random.lognormal(np.log(_width[0]), _width[1])
-        self.width = max(min(self.width, 100*_width[0]), 0.5*_width[0])
+        try:
+            self.width = np.random.lognormal(np.log(width[0]), width[1])
+            width = width[0]
+        except:
+             self.width = np.random.lognormal(np.log(width), width)
+        self.width = max(min(self.width, 100*width), 0.5*width)
 
         self.time_width = self.calc_width(tau=0)
         self.index_width = max(1, (np.round((self.time_width/ self.delta_t))).astype(int))
 
-        if hasattr(spec_ind, '__iter__') and len(spec_ind) == 2:
-            _spec_ind = tuple(spec_ind)
-        else:
-            _spec_ind = (float(spec_ind), float(spec_ind))
-        self.spec_ind = random.uniform(*_spec_ind)
+        try:
+            self.spec_ind = random.uniform(*spec_ind)
+        except:
+            self.spec_ind = spec_ind
 
-        if hasattr(disp_ind, '__iter__') and len(disp_ind) == 2:
-            _disp_ind = tuple(disp_ind)
-        else:
-            _disp_ind = (float(disp_ind), float(disp_ind))
-        self.disp_ind = random.uniform(*_disp_ind)
+        try:
+            self.disp_ind = random.uniform(*disp_ind)
+        except:
+            self.disp_ind = disp_ind
 
-        if hasattr(scat_factor, '__iter__') and len(scat_factor) == 2:
-            _scat_factor = tuple(scat_factor)
-        else:
-            _scat_factor = (float(scat_factor), float(scat_factor))
-        self.scat_factor = np.exp(np.random.uniform(*_scat_factor))
+        try:
+            self.scat_factor = np.exp(random.uniform(*scat_factor))
+        except:
+            self.scat_factor = np.exp(scat_factor)
         self.scat_factor = min(1, self.scat_factor + 1e-18) # quick bug fix hack
 
         self.freq = np.linspace(self.freq_low, self.freq_up, self.NFREQ) # tel parameter 
         self.simulated_frb = self.simulate_frb()
 
     def make_background(self, background, NFREQ, NTIME, rate):
-        if background is None:
-            self.background_noise = np.random.normal(0, 1, size=(NFREQ, NTIME))
-            self.NFREQ = NFREQ
-            self.NTIME = NTIME
-            self.header0 = None
-        elif isinstance(background, np.ndarray):
+        try:
             self.background_noise = background_noise
             self.NFREQ = background_noise.shape[0]
             self.NTIME = background_noise.shape[1]
             self.header0 = None
-        elif isinstance(background, str) and rate is not None:
+        except:
             try:
                 with vdif.open(background, 'rs', sample_rate=rate) as fh:
                     data = fh.read()
@@ -99,13 +89,11 @@ class Event(object):
                 self.background_noise = data.T
                 self.NFREQ = self.background_noise.shape[0]
                 self.NTIME = self.background_noise.shape[1]
-            # TODO: limit the type Exception caught here
-            except Exception:
-                raise ValueError("Could not open file {}\n Must be a vdif \
-                                  file".format(background))
-        else:
-            raise ValueError("Background an unrecognized format")
-
+            except:
+                self.background_noise = np.random.normal(0, 1, size=(NFREQ, NTIME))
+                self.NFREQ = NFREQ
+                self.NTIME = NTIME
+                self.header0 = None
 
     def disp_delay(self, f):
         """
