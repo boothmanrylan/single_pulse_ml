@@ -19,13 +19,15 @@ class Event(object):
     def __init__(self, t_ref, f_ref, NFREQ=16, NTIME=250, delta_t=0.0016,
                  background_noise=None, dm=(0.,2000.), fluence=(0.03,0.3),
                  width=(2*0.0016, 1.), spec_ind=(-4.,4), disp_ind=2.,
-                 scat_factor=(0, 0.5), freq=(800., 400.)):
+                 scat_factor=(0, 0.5), freq=(800., 400.), scintillate=True):
         self.t_ref = t_ref
         self.f_ref = f_ref
         self.width = width
         self.freq_low = freq[0]
         self.freq_up = freq[1]
         self.delta_t = delta_t
+        self.scintillate = scintillate
+        self.bandwidth = max(freq) - min(freq)
 
         if background_noise is None:
             self.background_noise = np.random.normal(0, 1, size=(NFREQ, NTIME))
@@ -90,7 +92,7 @@ class Event(object):
         t = t - self.disp_delay(self.f_ref)
         return self.t_ref + t
 
-    def calc_width(self, bw=400.0, tau=0):
+    def calc_width(self, tau=0):
         """ Calculated effective width of pulse
         including DM smearing, sample time, etc.
         Input/output times are in seconds.
@@ -98,7 +100,7 @@ class Event(object):
 
         ti = self.width * 1e3
         tsamp = self.delta_t * 1e3
-        delta_freq = bw/self.NFREQ
+        delta_freq = self.bandwidth/self.NFREQ
 
         # taudm in milliseconds
         tdm = (2*k_dm)*(10**-6) * self.dm * delta_freq / (self.f_ref*1e-3)**3
@@ -124,11 +126,11 @@ class Event(object):
 
         return envelope
 
-    def gaussian_profile(self, nt, width, t0=0.):
+    def gaussian_profile(self, width, t0=0.):
         """ Use a normalized Gaussian window for the pulse,
         rather than a boxcar.
         """
-        t = np.linspace(-nt//2, nt//2, nt)
+        t = np.linspace(-self.NTIME//2, self.NTIME//2, self.NTIME)
         g = np.exp(-(t-t0)**2 / width**2)
 
         if not np.all(g > 0):
@@ -138,26 +140,26 @@ class Event(object):
 
         return g
 
-    def scat_profile(self, nt, f, tau=1.):
+    def scat_profile(self, f, tau=1.):
         """ Include exponential scattering profile.
         """
         tau_nu = tau * (f / self.f_ref)**-4.
-        t = np.linspace(0., nt//2, nt)
+        t = np.linspace(0., self.NTIME//2, self.NTIME)
 
         prof = 1 / tau_nu * np.exp(-t / tau_nu)
         return prof / prof.max()
 
-    def pulse_profile(self, nt, width, f, t0=0.):
+    def pulse_profile(self, width, f, t0=0.):
         """ Convolve the gaussian and scattering profiles
         for final pulse shape at each frequency channel.
         """
-        gaus_prof = self.gaussian_profile(nt, width, t0=t0)
-        scat_prof = self.scat_profile(nt, f, self.scat_factor)
-        pulse_prof = signal.fftconvolve(gaus_prof, scat_prof)[:nt]
+        gaus_prof = self.gaussian_profile(width, t0=t0)
+        scat_prof = self.scat_profile(f, self.scat_factor)
+        pulse_prof = signal.fftconvolve(gaus_prof, scat_prof)[:self.NTIME]
 
         return pulse_prof
 
-    def add_to_data(self, bw, scintillate=True):
+    def add_to_data(self):
         """ Method to add already-dedispersed pulse
         to background noise data. Includes frequency-dependent
         width (smearing, scattering, etc.) and amplitude
@@ -167,11 +169,12 @@ class Event(object):
 
         tmid = self.NTIME//2
 
-        scint_amp = self.scintillation(self.freq)
+        if self.scintillate:
+            scint_amp = self.scintillation(self.freq)
         self.fluence /= np.sqrt(self.NFREQ)
         stds = np.std(data)
 
-        width_ = self.calc_width(bw=bw, tau=0)
+        width_ = self.calc_width(tau=0)
         index_width = max(1, (np.round((width_/ self.delta_t))).astype(int))
 
         for ii, f in enumerate(self.freq):
@@ -181,13 +184,13 @@ class Event(object):
                 # ensure that edges of data are not crossed
                 continue
 
-            pp = self.pulse_profile(self.NTIME, index_width, f, t0=tpix)
+            pp = self.pulse_profile(index_width, f, t0=tpix)
             pp /= (pp.max()*stds)
             pp *= self.fluence
             pp /= (width_ / self.delta_t)
             pp = pp * (f / self.f_ref) ** self.spec_ind
 
-            if scintillate is True:
+            if self.scintillate is True:
                 pp = (0.1 + scint_amp[ii]) * pp
 
             data[ii] +=pp
@@ -231,7 +234,7 @@ def inject_into_vdif(vdif_in, vdif_out, NFREQ=1024, NTIME=2**15,
                   spec_ind=spec_ind, width=(delta_t*2, 1), dm=dm,
                   scat_factor=scat_factor, background_noise=background,
                   delta_t=delta_t, freq=freq, f_ref=FREQ_REF)
-    new_data = event.add_to_data(bw=400, scintillate=True)
+    new_data = event.add_to_data()
     plt.figure(figsize=(45,70))
     plt.subplot(121)
     plt.imshow(data, vmin=-1.0, vmax=1.0, interpolation="nearest",
