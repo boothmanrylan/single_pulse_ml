@@ -18,9 +18,9 @@ class FRBEvent(object):
     """
     def __init__(self, t_ref=0*u.ms, f_ref=None, NFREQ=1024, NTIME=2**15,
                  delta_t=0.0016*u.ms, dm=(2e1, 2e2)*(u.pc/u.cm**3),
-                 fluence=(1e5, 1e6)*(u.Jy*u.ms), freq=(0.8, 0.4)*u.GHz,
-                 rate=(0.4/1024)*u.GHz, scat_factor=(-4, -0.5), width=None,
-                 scintillate=True, spec_ind=(-4.,4), background=None,):
+                 fluence=(1e6, 1e7)*(u.Jy*u.ms), freq=(0.8, 0.4)*u.GHz,
+                 rate=(0.4/1024)*u.GHz, scat_factor=(-4), width=None,
+                 scintillate=True, spec_ind=(-4.), background=None,):
         """
         t_ref :         The reference time used when computing the DM.
         f_ref :         The reference frequency used when computing the DM.
@@ -71,7 +71,7 @@ class FRBEvent(object):
             self.fluence = fluence**(4/3) * fluence_units
         self.fluence /= np.sqrt(self.NFREQ)
 
-        width =  width or (2, 4) * self.delta_t
+        width =  width or (10, 10) * self.delta_t
         units = width.unit
         value = width.value
         try:
@@ -95,6 +95,8 @@ class FRBEvent(object):
 
         self.freq = np.linspace(freq[0], freq[1], self.NFREQ).to(u.GHz)
         self.simulated_frb = self.simulate_frb()
+#         self.frb_dm = self.dm_transform(self.simulated_frb)
+#         self.bg_dm = self.dm_transform(self.background)
 
     def make_background(self, background, NFREQ, NTIME, rate):
         try:
@@ -231,6 +233,18 @@ class FRBEvent(object):
             data[ii] += p
         return data
 
+    def dm_transform(self, data, NDM=50):
+        dm = np.linspace(-self.dm, self.dm, NDM)
+        dm_data = np.zeros([NDM, self.NTIME])
+
+        for ii, dm in enumerate(dm):
+            for jj, f in enumerate(self.freq):
+                t = int(self.arrival_time(f) / self.delta_t)
+                data_rot = np.roll(data[jj], t, axis=-1)
+                dm_data[ii] += data_rot
+
+        return data
+
     def plot(self, save=None):
         f, axis = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(18, 30))
         axis[0].imshow(self.background, vmin=-1.0, vmax=1.0, interpolation="nearest",
@@ -261,7 +275,7 @@ class FRBEvent(object):
             plt.savefig(save)
 
 if __name__ == "__main__":
-    f = np.sort(glob.glob('/home/rylan/dunlap/data/natasha_vdif/000000*.vdif'))
+    f = np.sort(glob.glob('/home/rylan/dunlap/data/natasha_vdif/0000008.vdif'))
     vdif_in = sf.open(f)
     event = FRBEvent(background=vdif_in)
     event.plot()
