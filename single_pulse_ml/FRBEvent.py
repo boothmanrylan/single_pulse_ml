@@ -17,7 +17,7 @@ class FRBEvent(object):
     Kiyoshi Masui's https://github.com/kiyo-masui/burst\_search
     """
     def __init__(self, t_ref=0*u.ms, f_ref=0.6*u.GHz, NFREQ=1024, NTIME=2**15,
-                 delta_t=0.16*u.ms, dm=(15, 50)*(u.pc/u.cm**3),
+                 delta_t=0.16*u.ms, dm=(150, 2500)*(u.pc/u.cm**3),
                  fluence=(0.02, 150)*(u.Jy*u.ms), freq=(0.8, 0.4)*u.GHz,
                  rate=(0.4/1024)*u.GHz, scat_factor=(-5, -4),
                  width=(0.05, 30)*u.ms, scintillate=True, spec_ind=(-10, 15),
@@ -178,12 +178,12 @@ class FRBEvent(object):
 
         return envelope
 
-    def gaussian_profile(self, t):
+    def gaussian_profile(self, t0):
         """
         Use a normalized Gaussian window for the pulse, rather than a boxcar.
         """
-        tlin = np.linspace(-self.NTIME//2, self.NTIME//2, self.NTIME)
-        g = np.exp(-(tlin-t)**2 / self.width**2)
+        t = np.linspace(-self.NTIME//2, self.NTIME//2, self.NTIME)
+        g = np.exp(-(t-t0)**2 / self.width**2)
 
         if not np.all(g > 0):
             g += 1e-18
@@ -231,10 +231,11 @@ class FRBEvent(object):
             scint_amp = self.scintillation(self.freq)
 
         for ii, f in enumerate(self.freq):
+            # calculate the arrival time index
             t = int(self.arrival_time(f) / self.delta_t)
 
+            # ensure that edges of data are not crossed
             if abs(t) >= tmid:
-                # ensure that edges of data are not crossed
                 continue
 
             p = self.pulse_profile(f, t)
@@ -250,13 +251,13 @@ class FRBEvent(object):
         dm_data = np.zeros([NDM, self.NTIME])
         return None
 
-#         for ii, dm in enumerate(dm):
-#             for jj, f in enumerate(self.freq):
-#                 t = int(self.arrival_time(f) / self.delta_t)
-#                 data_rot = np.roll(data[jj], t, axis=-1)
-#                 dm_data[ii] += data_rot
-# 
-#         return data
+        for ii, dm in enumerate(dm):
+            for jj, f in enumerate(self.freq):
+                t = int(self.arrival_time(f) / self.delta_t)
+                data_rot = np.roll(data[jj], t, axis=-1)
+                dm_data[ii] += data_rot
+
+        return data
 
     def plot(self, save=None):
         f, axis = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(18, 30))
