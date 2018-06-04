@@ -7,7 +7,7 @@ import astropy.units as u
 from scipy import signal
 import matplotlib.pyplot as plt
 
-k_dm = 4.148808e-1 * (u.GHz**2 * u.cm**3 * u.ms / u.pc)
+k_dm = 4.148808e6 * (u.MHz**2 * u.cm**3 * u.ms / u.pc)
 
 class FRBEvent(object):
     """
@@ -16,11 +16,12 @@ class FRBEvent(object):
     DM smearing .This class was expanded from real-time FRB injection in
     Kiyoshi Masui's https://github.com/kiyo-masui/burst\_search
     """
-    def __init__(self, t_ref=0*u.ms, f_ref=None, NFREQ=1024, NTIME=2**15,
-                 delta_t=0.0016*u.ms, dm=(2e1, 2e2)*(u.pc/u.cm**3),
-                 fluence=(1e6, 1e7)*(u.Jy*u.ms), freq=(0.8, 0.4)*u.GHz,
-                 rate=(0.4/1024)*u.GHz, scat_factor=(-4), width=None,
-                 scintillate=True, spec_ind=(-4.), background=None,):
+    def __init__(self, t_ref=0*u.ms, f_ref=0.6*u.GHz, NFREQ=1024, NTIME=2**15,
+                 delta_t=0.16*u.ms, dm=(15, 50)*(u.pc/u.cm**3),
+                 fluence=(0.02, 150)*(u.Jy*u.ms), freq=(0.8, 0.4)*u.GHz,
+                 rate=(0.4/1024)*u.GHz, scat_factor=(-5, -4),
+                 width=(0.05, 30)*u.ms, scintillate=True, spec_ind=(-10, 15),
+                 background=None,):
         """
         t_ref :         The reference time used when computing the DM.
         f_ref :         The reference frequency used when computing the DM.
@@ -39,17 +40,18 @@ class FRBEvent(object):
         """
         self.t_ref = t_ref.to(u.ms)
         self.scintillate = scintillate
-        self.bandwidth = (max(freq) - min(freq)).to(u.GHz)
-        self.rate=rate.to(u.GHz)
+        self.bandwidth = (max(freq) - min(freq)).to(u.MHz)
 
         if f_ref is None:
             f_ref = (max(freq.value)*0.9, min(freq.value)*1.1) * freq.unit
             f_ref = random.uniform(*f_ref)
-        self.f_ref = f_ref.to(u.GHz)
+        self.f_ref = f_ref.to(u.MHz)
 
         if rate is None:
+            self.rate = rate
             self.delta_t = delta_t.to(u.ms)
         else:
+            self.rate=rate.to(u.MHz)
             self.delta_t = (1/rate).to(u.ms)
 
         self.make_background(background, NFREQ, NTIME, rate)
@@ -61,17 +63,13 @@ class FRBEvent(object):
         except:
             self.dm = dm.to(u.pc/u.cm**3)
 
-        fluence_units = fluence.unit
-        fluence = fluence.value
         try:
-            # There is a weird effect when the bracets around random are
-            # removed changing the order of operations
-            self.fluence = random.uniform(*fluence)**(4/3) * fluence_units
+            self.fluence = random.uniform(*fluence)
         except:
-            self.fluence = fluence**(4/3) * fluence_units
-        self.fluence /= np.sqrt(self.NFREQ)
+            self.fluence = fluence
 
-        width =  width or (10, 10) * self.delta_t
+        if width is None:
+            width =  (2, 5) * self.delta_t
         units = width.unit
         value = width.value
         try:
@@ -93,10 +91,25 @@ class FRBEvent(object):
             self.scat_factor = np.exp(scat_factor)
         self.scat_factor = min(1, self.scat_factor + 1e-18) # quick bug fix hack
 
-        self.freq = np.linspace(freq[0], freq[1], self.NFREQ).to(u.GHz)
+        self.freq = np.linspace(freq[0], freq[1], self.NFREQ).to(u.MHz)
         self.simulated_frb = self.simulate_frb()
 #         self.frb_dm = self.dm_transform(self.simulated_frb)
 #         self.bg_dm = self.dm_transform(self.background)
+
+    def __repr__(self):
+        repr = "Reference Time: {}\n".format(self.t_ref)
+        repr += "Reference Frequency: {}\n".format(self.f_ref)
+        repr += "Scintillate: {}\n".format(self.scintillate)
+        repr += "Bandwidth: {}\n".format(self.bandwidth)
+        repr += "Sampling Rate: {}\n".format(self.rate)
+        repr += "Dispersion Measure: {}\n".format(self.dm)
+        repr += "Fluence: {}\n".format(self.fluence)
+        repr += "Width: {}\n".format(self.width)
+        repr += "Spectral Index: {}\n".format(self.spec_ind)
+        repr += "Scatter Factor: {}\n".format(self.scat_factor)
+        repr += "Frequency: {}-{}\n".format(min(self.freq), max(self.freq))
+        repr += "Shape: {}\n".format(self.background.shape)
+        return repr
 
     def make_background(self, background, NFREQ, NTIME, rate):
         try:
@@ -159,7 +172,6 @@ class FRBEvent(object):
 
         # Make number of scintils between 0 and 10 (ish)
         nscint = np.exp(np.random.uniform(np.log(1e-3), np.log(7)))
-        #nscint=5
         envelope = np.cos(2*np.pi*nscint*f + scint_phi)
         envelope[envelope<0] = 0
         envelope += 0.1
@@ -198,11 +210,11 @@ class FRBEvent(object):
         gaus_prof = self.gaussian_profile(t)
         scat_prof = self.scat_profile(f)
         pulse_prof = signal.fftconvolve(gaus_prof, scat_prof)[:self.NTIME]
-        pulse_prof /= (pulse_prof.max()*self.stds)
+        #pulse_prof /= (pulse_prof.max()*self.stds)
         pulse_prof *= self.fluence.value
-        pulse_prof /= (self.width / self.delta_t.value)
+        #pulse_prof /= (self.width / self.delta_t.value)
 
-        pulse_prof = pulse_prof * (f / self.f_ref).value ** self.spec_ind
+        pulse_prof *= (f / self.f_ref).value ** self.spec_ind
 
         return pulse_prof
 
@@ -236,14 +248,15 @@ class FRBEvent(object):
     def dm_transform(self, data, NDM=50):
         dm = np.linspace(-self.dm, self.dm, NDM)
         dm_data = np.zeros([NDM, self.NTIME])
+        return None
 
-        for ii, dm in enumerate(dm):
-            for jj, f in enumerate(self.freq):
-                t = int(self.arrival_time(f) / self.delta_t)
-                data_rot = np.roll(data[jj], t, axis=-1)
-                dm_data[ii] += data_rot
-
-        return data
+#         for ii, dm in enumerate(dm):
+#             for jj, f in enumerate(self.freq):
+#                 t = int(self.arrival_time(f) / self.delta_t)
+#                 data_rot = np.roll(data[jj], t, axis=-1)
+#                 dm_data[ii] += data_rot
+# 
+#         return data
 
     def plot(self, save=None):
         f, axis = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(18, 30))
@@ -275,8 +288,9 @@ class FRBEvent(object):
             plt.savefig(save)
 
 if __name__ == "__main__":
-    f = np.sort(glob.glob('/home/rylan/dunlap/data/natasha_vdif/0000008.vdif'))
+    f = np.sort(glob.glob('/home/rylan/dunlap/data/natasha_vdif/000001*.vdif'))
     vdif_in = sf.open(f)
     event = FRBEvent(background=vdif_in)
+    print(event)
     event.plot()
 
