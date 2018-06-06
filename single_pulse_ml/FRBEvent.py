@@ -1,6 +1,7 @@
 import random
 import glob
 import numpy as np
+import pandas as pd
 from baseband import vdif
 from baseband.helpers import sequentialfile as sf
 import astropy.units as u
@@ -41,6 +42,7 @@ class FRBEvent(object):
         self.t_ref = t_ref.to(u.ms)
         self.scintillate = scintillate
         self.bandwidth = (max(freq) - min(freq)).to(u.MHz)
+        self.output_file = None
 
         if f_ref is None:
             f_ref = (max(freq.value)*0.9, min(freq.value)*1.1) * freq.unit
@@ -249,7 +251,6 @@ class FRBEvent(object):
     def dm_transform(self, data, NDM=50):
         dm = np.linspace(-self.dm, self.dm, NDM)
         dm_data = np.zeros([NDM, self.NTIME])
-        return None
 
         for ii, dm in enumerate(dm):
             for jj, f in enumerate(self.freq):
@@ -287,6 +288,50 @@ class FRBEvent(object):
             plt.show()
         else:
             plt.savefig(save)
+
+    def save(self, output_file):
+        """
+        Save the simulated FRB as a binary .npy file.
+        Output_file will be erased if it already exists.
+        """
+        np.save(output_file, self.simulated_frb)
+        self.output_file = output_file
+
+    def get_parameters(self):
+        """
+        Return the parameters of the event as a dictionary.
+        """
+        params = {'t_ref': self.t_ref, 'scintillate': self.scintillate,
+                  'bandwidth': self.bandwidth, 'f_ref': self.f_ref,
+                  'rate': self.rate, 'delta_t': self.delta_t,
+                  'NFREQ': self.NFREQ, 'NTIME': self.NTIME, 'stds': self.stds,
+                  'dm': self.dm, 'fluence': self.fluence, 'width': self.width,
+                  'spec_ind': self.spec_ind, 'scat_factor': self.scat_factor,
+                  'max_freq': max(self.freq), 'min_freq': min(self.freq),
+                  'Name': self.output_file, 'Input': self.input, 'FRB': True}
+        return params
+
+    def save_metadata(self, metadata_sheet):
+        """
+        Create a csv metadata sheet for the FRB event. If metadatasheet already
+        exists a new row containing the metadata for this event will be
+        appended to the bottom of the array. If the metadatasheet does not
+        exist a new file will be created.
+        """
+        params = self.get_parameters()
+        try:
+            md = pd.read_csv(metadata_sheet)
+            for elem in md.columns:
+                if elem not in params:
+                    params[elem] = None
+            for elem in params:
+                if elem not in md.columns:
+                    md[elem] = None
+            md.loc[md.shape[0]] = params
+        except FileNotFoundError:
+            md = pd.DataFrame([params])
+        md.to_csv(metadata_sheet, sep=',', index=False)
+
 
 if __name__ == "__main__":
     f = np.sort(glob.glob('/home/rylan/dunlap/data/natasha_vdif/000001*.vdif'))
