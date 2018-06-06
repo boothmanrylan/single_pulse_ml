@@ -62,12 +62,12 @@ class FRBEvent(object):
 
         try:
             self.dm = random.uniform(*dm).to(u.pc/u.cm**3)
-        except:
+        except TypeError:
             self.dm = dm.to(u.pc/u.cm**3)
 
         try:
             self.fluence = random.uniform(*fluence)
-        except:
+        except TypeError:
             self.fluence = fluence
 
         if width is None:
@@ -77,19 +77,19 @@ class FRBEvent(object):
         try:
             logvalue = np.random.lognormal(np.log(value[0]), value[1])
             value = value[0]
-        except:
+        except TypeError:
              logvalue = np.random.lognormal(np.log(value), value)
         width = max(min(logvalue, 100*value), 0.5*value) * units
         self.width = self.calc_width(width)
 
         try:
             self.spec_ind = random.uniform(*spec_ind)
-        except:
+        except TypeError:
             self.spec_ind = spec_ind
 
         try:
             self.scat_factor = np.exp(random.uniform(*scat_factor))
-        except:
+        except TypeError:
             self.scat_factor = np.exp(scat_factor)
         self.scat_factor = min(1, self.scat_factor + 1e-18) # quick bug fix hack
 
@@ -115,26 +115,26 @@ class FRBEvent(object):
 
     def make_background(self, background, NFREQ, NTIME, rate):
         try:
-            self.background = background
-            self.NFREQ = background.shape[0]
-            self.NTIME = background.shape[1]
-            self.header0 = None
-        except:
+            with vdif.open(background, 'rs', sample_rate=rate) as fh:
+                data = fh.read()
+            # Get the power from data
+            data = (np.abs(data)**2).mean(1)
+            data = data - np.nanmean(data, axis=1, keepdims=True)
+            self.background = data.T
+            self.NFREQ = self.background.shape[0]
+            self.NTIME = self.background.shape[1]
+            self.input = background
+        except FileNotFoundError:
             try:
-                with vdif.open(background, 'rs', sample_rate=rate) as fh:
-                    data = fh.read()
-                    self.header0 = fh.header0
-                # Get the power from data
-                data = (np.abs(data)**2).mean(1)
-                data = data - np.nanmean(data, axis=1, keepdims=True)
-                self.background = data.T
-                self.NFREQ = self.background.shape[0]
-                self.NTIME = self.background.shape[1]
-            except:
+                self.background = background
+                self.NFREQ = background.shape[0]
+                self.NTIME = background.shape[1]
+                self.input = 'ndarray'
+            except AttributeError:
                 self.background = np.random.normal(0, 1, size=(NFREQ, NTIME))
                 self.NFREQ = NFREQ
                 self.NTIME = NTIME
-                self.header0 = None
+                self.input = None
 
     def disp_delay(self, f):
         """
