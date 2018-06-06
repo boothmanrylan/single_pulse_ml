@@ -99,18 +99,18 @@ class FRBEvent(object):
 #         self.bg_dm = self.dm_transform(self.background)
 
     def __repr__(self):
-        repr = "Reference Time: {}\n".format(self.t_ref)
-        repr += "Reference Frequency: {}\n".format(self.f_ref)
-        repr += "Scintillate: {}\n".format(self.scintillate)
-        repr += "Bandwidth: {}\n".format(self.bandwidth)
-        repr += "Sampling Rate: {}\n".format(self.rate)
-        repr += "Dispersion Measure: {}\n".format(self.dm)
-        repr += "Fluence: {}\n".format(self.fluence)
-        repr += "Width: {}\n".format(self.width)
-        repr += "Spectral Index: {}\n".format(self.spec_ind)
-        repr += "Scatter Factor: {}\n".format(self.scat_factor)
-        repr += "Frequency: {}-{}\n".format(min(self.freq), max(self.freq))
-        repr += "Shape: {}\n".format(self.background.shape)
+        repr = "Reference Time:\t\t{}\n".format(self.t_ref)
+        repr += "Reference Frequency:\t{}\n".format(self.f_ref)
+        repr += "Scintillate:\t\t{}\n".format(self.scintillate)
+        repr += "Bandwidth:\t\t{}\n".format(self.bandwidth)
+        repr += "Sampling Rate:\t\t{}\n".format(self.rate)
+        repr += "Dispersion Measure:\t{}\n".format(self.dm)
+        repr += "Fluence:\t\t{}\n".format(self.fluence)
+        repr += "Width:\t\t\t{}\n".format(self.width)
+        repr += "Spectral Index:\t\t{}\n".format(self.spec_ind)
+        repr += "Scatter Factor:\t\t{}\n".format(self.scat_factor)
+        repr += "Frequency:\t\t{}-{}\n".format(min(self.freq.value), max(self.freq))
+        repr += "Shape:\t\t\t{}\n".format(self.background.shape)
         return repr
 
     def make_background(self, background, NFREQ, NTIME, rate):
@@ -124,12 +124,14 @@ class FRBEvent(object):
             self.NFREQ = self.background.shape[0]
             self.NTIME = self.background.shape[1]
             self.input = background
-        except FileNotFoundError:
+        # If background isn't a filepath or if the file doesn't exist
+        except (FileNotFoundError, TypeError):
             try:
                 self.background = background
                 self.NFREQ = background.shape[0]
                 self.NTIME = background.shape[1]
                 self.input = 'ndarray'
+            # If background doesn't have a shape attribute
             except AttributeError:
                 self.background = np.random.normal(0, 1, size=(NFREQ, NTIME))
                 self.NFREQ = NFREQ
