@@ -1,11 +1,15 @@
 import random
 import glob
+import os
+import string
 import numpy as np
 import pandas as pd
 from baseband import vdif
 from baseband.helpers import sequentialfile as sf
 import astropy.units as u
 from scipy import signal
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 k_dm = 4.148808e6 * (u.MHz**2 * u.cm**3 * u.ms / u.pc)
@@ -18,7 +22,7 @@ class FRBEvent(object):
     Kiyoshi Masui's https://github.com/kiyo-masui/burst\_search
     """
     def __init__(self, t_ref=0*u.ms, f_ref=0.6*u.GHz, NFREQ=1024, NTIME=2**15,
-                 delta_t=0.16*u.ms, dm=(150, 2500)*(u.pc/u.cm**3),
+                 delta_t=0.16*u.ms, dm=(150, 1500)*(u.pc/u.cm**3),
                  fluence=(0.02, 150)*(u.Jy*u.ms), freq=(0.8, 0.4)*u.GHz,
                  rate=(0.4/1024)*u.GHz, scat_factor=(-5, -4),
                  width=(0.05, 30)*u.ms, scintillate=True, spec_ind=(-10, 15),
@@ -95,8 +99,6 @@ class FRBEvent(object):
 
         self.freq = np.linspace(freq[0], freq[1], self.NFREQ).to(u.MHz)
         self.simulated_frb = self.simulate_frb()
-#         self.frb_dm = self.dm_transform(self.simulated_frb)
-#         self.bg_dm = self.dm_transform(self.background)
 
     def __repr__(self):
         repr = "Reference Time:\t\t{}\n".format(self.t_ref)
@@ -114,29 +116,36 @@ class FRBEvent(object):
         return repr
 
     def make_background(self, background, NFREQ, NTIME, rate):
-        try:
-            with vdif.open(background, 'rs', sample_rate=rate) as fh:
-                data = fh.read()
+        try: # background is a file or list of files
+            try: # background is a single file
+                background = background.split()
+            except AttributeError: # background is a list of files
+                pass
+            background = sf.open(background)
+            fh = vdif.open(background, 'rs', sample_rate=rate)
+            data = fh.read()
+            fh.close()
             # Get the power from data
             data = (np.abs(data)**2).mean(1)
             data = data - np.nanmean(data, axis=1, keepdims=True)
             self.background = data.T
             self.NFREQ = self.background.shape[0]
             self.NTIME = self.background.shape[1]
-            self.input = background
-        # If background isn't a filepath or if the file doesn't exist
-        except (FileNotFoundError, TypeError):
-            try:
+            # Get the input filenames without their path or suffix 
+            files = background.files
+            files = ['.'.join(x.split('/')[-1].split('.')[:-1]) for x in files]
+            self.input = '-'.join(files)
+        except TypeError: # background isn't a file or the file doesn't exist
+            try: # background is a numpy array 
                 self.background = background
                 self.NFREQ = background.shape[0]
                 self.NTIME = background.shape[1]
                 self.input = 'ndarray'
-            # If background doesn't have a shape attribute
-            except AttributeError:
+            except AttributeError: # background isn't an array
                 self.background = np.random.normal(0, 1, size=(NFREQ, NTIME))
                 self.NFREQ = NFREQ
                 self.NTIME = NTIME
-                self.input = None
+                self.input = 'None'
 
     def disp_delay(self, f):
         """
@@ -291,13 +300,47 @@ class FRBEvent(object):
         else:
             plt.savefig(save)
 
-    def save(self, output_file):
+    def save(self, output):
         """
-        Save the simulated FRB as a binary .npy file.
-        Output_file will be erased if it already exists.
+        Save the simulated FRB as a binary .npy file. If output already exists
+        will attempt to append a character from string.ascii_letters. If output
+        already exists with every character from string.ascii_letters, this
+        will fail and raise a FileExistsError.
+
+        Params:
+            output (str): Path to where you want to save the simulation.
+
+        Returns: None
         """
-        np.save(output_file, self.simulated_frb)
-        self.output_file = output_file
+        split_output = output.split('/')
+        output_dir = '/'.join(split_output[:-1])
+        split_file = split_output[-1].split('.')
+        if len(split_output) >= 2:
+            file = '.'.join(split_file[:-1])
+            file_suffix = split_output[-1]
+        else:
+            file = '.'.join(split_file)
+            file_suffix = ''
+
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        i = 0
+        found_safe_output = False
+        while not found_safe_output:
+            if os.path.exists(output):
+                if i >= len(string.ascii_letters):
+                    msg = "Will not overwrite files and the file {} already \
+                           exists with every possible suffix".format(output)
+                    raise FileExistsError(msg)
+                else:
+                    letter = string.ascii_letters[i]
+                    output = output_dir + '/' + file + letter + file_suffix
+                    i += 1
+            else:
+                found_safe_output = True
+        np.save(output, self.simulated_frb)
+        self.output_file = output
 
     def get_parameters(self):
         """
