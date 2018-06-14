@@ -9,7 +9,7 @@ from baseband.helpers import sequentialfile as sf
 import astropy.units as u
 from scipy import signal
 import matplotlib
-matplotlib.use('Agg')
+# matplotlib.use('Agg') # Needed when running on scinet
 import matplotlib.pyplot as plt
 
 k_dm = 4.148808e6 * (u.MHz**2 * u.cm**3 * u.ms / u.pc)
@@ -26,7 +26,7 @@ class FRBEvent(object):
                  fluence=(0.02, 150)*(u.Jy*u.ms), freq=(0.8, 0.4)*u.GHz,
                  rate=(0.4/1024)*u.GHz, scat_factor=(-5, -4),
                  width=(0.05, 30)*u.ms, scintillate=True, spec_ind=(-10, 15),
-                 background=None,):
+                 background=None, max_size=2**15):
         """
         t_ref :         The reference time used when computing the DM.
         f_ref :         The reference frequency used when computing the DM.
@@ -42,25 +42,28 @@ class FRBEvent(object):
         scintillate :   If true scintills are added to the data.
         spec_ind :      The spectral index.
         background :    The background the pulse will be injected into.
+        max_size :      The size to reduce/bin the data to in time.
         """
+        # TODO: If input are not quantities, give them default units
         self.t_ref = t_ref.to(u.ms)
         self.scintillate = scintillate
         self.bandwidth = (max(freq) - min(freq)).to(u.MHz)
         self.output_file = None
+        self.max_size = max_size
 
         if f_ref is None:
             f_ref = (max(freq.value)*0.9, min(freq.value)*1.1) * freq.unit
             f_ref = random.uniform(*f_ref)
         self.f_ref = f_ref.to(u.MHz)
 
-        if rate is None:
-            self.rate = rate
-            self.delta_t = delta_t.to(u.ms)
-        else:
+        try:
             self.rate=rate.to(u.MHz)
             self.delta_t = (1/rate).to(u.ms)
+        except AttributeError:
+            self.rate = rate
+            self.delta_t = delta_t.to(u.ms)
 
-        self.make_background(background, NFREQ, NTIME, rate)
+        self.make_background(background, NFREQ, NTIME)
 
         self.stds = np.std(self.background)
 
@@ -101,41 +104,23 @@ class FRBEvent(object):
         self.simulated_frb = self.simulate_frb()
 
     def __repr__(self):
-        repr = "Reference Time:\t\t{}\n".format(self.t_ref)
-        repr += "Reference Frequency:\t{}\n".format(self.f_ref)
-        repr += "Scintillate:\t\t{}\n".format(self.scintillate)
-        repr += "Bandwidth:\t\t{}\n".format(self.bandwidth)
-        repr += "Sampling Rate:\t\t{}\n".format(self.rate)
-        repr += "Dispersion Measure:\t{}\n".format(self.dm)
-        repr += "Fluence:\t\t{}\n".format(self.fluence)
-        repr += "Width:\t\t\t{}\n".format(self.width)
-        repr += "Spectral Index:\t\t{}\n".format(self.spec_ind)
-        repr += "Scatter Factor:\t\t{}\n".format(self.scat_factor)
-        repr += "Frequency:\t\t{}-{}\n".format(min(self.freq.value), max(self.freq))
-        repr += "Shape:\t\t\t{}\n".format(self.background.shape)
+        repr = str(self.get_parameters())
+        repr = repr[1:-1]
+        repr = repr.split(', ')
+        repr = '\n'.join(repr)
         return repr
 
-    def make_background(self, background, NFREQ, NTIME, rate):
+    def make_background(self, background, NFREQ, NTIME):
         try: # background is a file or list of files
-            try: # background is a single file
-                background = background.split()
-            except AttributeError: # background is a list of files
-                pass
-            background = sf.open(background)
-            fh = vdif.open(background, 'rs', sample_rate=rate)
-            data = fh.read()
-            fh.close()
-            # Get the power from data
-            data = (np.abs(data)**2).mean(1)
-            data = data - np.nanmean(data, axis=1, keepdims=True)
-            self.background = data.T
-            self.NFREQ = self.background.shape[0]
-            self.NTIME = self.background.shape[1]
-            # Get the input filenames without their path or suffix 
-            files = background.files
-            files = ['.'.join(x.split('/')[-1].split('.')[:-1]) for x in files]
-            self.input = '-'.join(files)
-        except TypeError: # background isn't a file or the file doesn't exist
+             data, files, rate = read_vdif(background,self.rate,self.max_size)
+             self.background = data
+             self.NFREQ = self.background.shape[0]
+             self.NTIME = self.background.shape[1]
+             self.input = files
+             self.rate = rate
+             self.delta_t = (1/rate).to(u.ms)
+        except TypeError as E: # background isn't a file or the file doesn't exist
+            raise(E)
             try: # background is a numpy array 
                 self.background = background
                 self.NFREQ = background.shape[0]
@@ -146,6 +131,15 @@ class FRBEvent(object):
                 self.NFREQ = NFREQ
                 self.NTIME = NTIME
                 self.input = 'None'
+            if self.NTIME > self.max_size: # Reduce detail in time
+                width = int(self.max_size)
+                while self.NTIME % width != 0:
+                    width -= 1
+                x = self.NTIME//width
+                self.background = self.background.reshape(self.NFREQ, x, width)
+                self.background = self.background.mean(1)
+                self.delta_t = self.NTIME * self.delta_t / width
+                self.NTIME = width
 
     def disp_delay(self, f):
         """
@@ -223,11 +217,10 @@ class FRBEvent(object):
         gaus_prof = self.gaussian_profile(t)
         scat_prof = self.scat_profile(f)
         pulse_prof = signal.fftconvolve(gaus_prof, scat_prof)[:self.NTIME]
-        #pulse_prof /= (pulse_prof.max()*self.stds)
         pulse_prof *= self.fluence.value
-        #pulse_prof /= (self.width / self.delta_t.value)
-
         pulse_prof *= (f / self.f_ref).value ** self.spec_ind
+        # pulse_prof /= (pulse_prof.max()*self.stds)
+        # pulse_prof /= (self.width / self.delta_t.value)
 
         return pulse_prof
 
@@ -259,6 +252,7 @@ class FRBEvent(object):
             data[ii] += p
         return data
 
+    # TODO: Make this more efficient 
     def dm_transform(self, data, NDM=50):
         dm = np.linspace(-self.dm, self.dm, NDM)
         dm_data = np.zeros([NDM, self.NTIME])
@@ -302,43 +296,20 @@ class FRBEvent(object):
 
     def save(self, output):
         """
-        Save the simulated FRB as a binary .npy file. If output already exists
-        will attempt to append a character from string.ascii_letters. If output
-        already exists with every character from string.ascii_letters, this
-        will fail and raise a FileExistsError.
+        Save the simulated FRB as a binary .npy file. If output already exists,
+        it will be over written. If the file extension of output is not .npy,
+        .npy will be appended to the end of output. For example if output is
+        foobar.txt the data will be saved to a file named foobar.txt.npy
 
         Params:
             output (str): Path to where you want to save the simulation.
 
         Returns: None
         """
-        split_output = output.split('/')
-        output_dir = '/'.join(split_output[:-1])
-        split_file = split_output[-1].split('.')
-        if len(split_output) >= 2:
-            file = '.'.join(split_file[:-1])
-            file_suffix = split_output[-1]
-        else:
-            file = '.'.join(split_file)
-            file_suffix = ''
-
+        output_dir = '/'.join(output.split('/')[:-1])
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        i = 0
-        found_safe_output = False
-        while not found_safe_output:
-            if os.path.exists(output):
-                if i >= len(string.ascii_letters):
-                    msg = "Will not overwrite files and the file {} already \
-                           exists with every possible suffix".format(output)
-                    raise FileExistsError(msg)
-                else:
-                    letter = string.ascii_letters[i]
-                    output = output_dir + '/' + file + letter + file_suffix
-                    i += 1
-            else:
-                found_safe_output = True
         np.save(output, self.simulated_frb)
         self.output_file = output
 
@@ -356,32 +327,111 @@ class FRBEvent(object):
                   'Name': self.output_file, 'Input': self.input, 'FRB': True}
         return params
 
-    def save_metadata(self, metadata_sheet):
-        """
-        Create a csv metadata sheet for the FRB event. If metadatasheet already
-        exists a new row containing the metadata for this event will be
-        appended to the bottom of the array. If the metadatasheet does not
-        exist a new file will be created.
-        """
-        params = self.get_parameters()
-        try:
-            md = pd.read_csv(metadata_sheet)
-            for elem in md.columns:
-                if elem not in params:
-                    params[elem] = None
-            for elem in params:
-                if elem not in md.columns:
-                    md[elem] = None
-            md.loc[md.shape[0]] = params
-        except FileNotFoundError:
-            md = pd.DataFrame([params])
-        md.to_csv(metadata_sheet, sep=',', index=False)
+
+def chunk_read(fh, n_chunks, sample_rate):
+    """
+    Read the data contained in the vdif file handle fh in chunks no bigger than
+    size max and reduce the size of data in the time dimension to be no bigger
+    than size max. If it is not possible to reduce the data to a size <= max
+    because the shape of the data contained cannot be factored into a value <=
+    max the data will be read as normal and not reduced at all.
+
+    Args:
+        fh (vdif StreamReader): The file handle containing the data to be read.
+        samples (int):          The number of samples contained in fh.
+        max (int):              The maximum size to chunk/reduce the data to.
+
+    Returns:
+        complete_data (ndarray): The data contained in fh, chunked/reduced to
+                                 size max if possible.
+    """
+    samples = fh.shape[0]
+    final_width = 2**17
+
+    T = samples/sample_rate
+
+    new_sample_rate = T / final_width
+
+    n_reads = samples//final_width
+
+    read_width = final_width//n_reads
+
+    complete_data = np.zeros((fh.shape[-1], final_width))
+    for i in range(n_reads):
+        data = fh.read(final_width)
+        # Get the power from data
+        data = (np.abs(data)**2).mean(1)
+        data -= np.nanmean(data, axis=1, keepdims=True)
+        data = data.T
+        # Reshape, bin, take mean to reduce data size
+        data = data.reshape(fh.shape[-1], n_reads, read_width)
+        data = data.mean(1)
+        # Add data to complete_data
+        complete_data[:, i*read_width:(i+1)*read_width] = data
+
+    return complete_data, new_sample_rate
+
+
+def read_vdif(vdif_files, sample_rate, max=2**15):
+    """
+    Reads the data from vdif_files. Sets up self.background, self.NFREQ,
+    and self.NTIME. Will handle the cases where vdif_files is a single
+    vdif_file and the cases where vdir_files is a list of files. If there
+    is more than 2**15 samples contained in vdif_files, the data will be
+    binned in the time dimension to reduce the size of the data.
+
+    Args:
+        vdif_files (list or str):   The path to the vdif file to be read, or a
+                                    list of paths to different vdif files to be
+                                    read. If a list is given the vdifs will be
+                                    opened in the order they are given in the
+                                    list.
+        sample_rate (Quantity):     The sampling rate of the vdifs.
+        max (int):                  The upper limit on final # of samples to
+                                    contain the data in. The largest factor of
+                                    the number of samples in vdif_files <= max
+                                    will be the actual size of the data. If
+                                    there are no factors of the number of
+                                    samples less than max than the data will
+                                    not be binned.
+    Returns:
+        background (ndarray):   The data contained in the vdifs.
+        files (str):            The names of the vdif files with prefix/suffix
+                                removed, joined by dashes.
+    """
+    try:
+        temp = vdif_files.split() # Will split if str, fail if list
+        vdif_files = [vdif_files] # Convert to a list with 1 element
+    except AttributeError:
+        pass # Do nothing because vdif_files is already a list
+
+    vdif_files = sf.open(vdif_files)
+    with vdif.open(vdif_files, 'rs', sample_rate=sample_rate) as fh:
+#         if fh.shape[0] > max: # Read data in chunks, reduce size to be <= max
+#             complete_data, new_rate = chunk_read(fh, max, sample_rate)
+#         else: # Read data all at once
+        complete_data = fh.read()
+        # Get the power from data
+        complete_data = (np.abs(complete_data)**2).mean(1)
+        complete_data -= np.nanmean(complete_data, axis=1, keepdims=True)
+        complete_data = complete_data.T
+        new_rate = sample_rate
+
+    # Get the input filenames without their path or suffix 
+    files = vdif_files.files
+    files = ['.'.join(x.split('/')[-1].split('.')[:-1]) for x in files]
+    file_names = '-'.join(files)
+
+    return complete_data, file_names, new_rate
 
 
 if __name__ == "__main__":
-    f = np.sort(glob.glob('/home/rylan/dunlap/data/natasha_vdif/000001*.vdif'))
-    vdif_in = sf.open(f)
-    event = FRBEvent(background=vdif_in)
+    d = '/home/rylan/dunlap/data/vdif/000010'
+    files = [d + str(x) + '.vdif' for x in range(10)]
+    #files = [d + str(x) + '.vdif' for x in range(10)]
+    #d = '/home/rylan/dunlap/data/vdif/00001'
+    #files.extend([d + str(x) + '.vdif' for x in range(16)[10:]])
+    event = FRBEvent(background=files, dm=250*u.pc/u.cm**3)
     print(event)
     event.plot()
 
